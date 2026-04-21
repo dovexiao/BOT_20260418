@@ -120,11 +120,12 @@ async function handleJoin(slotId: string, user?: Context['from']) {
   const limit = slot.limit as number
   const joinedCnt = await joinedRepository.countBySlotId(slotId)
   if (joinedCnt < limit) {
+    const displayName = [user.first_name?.trim(), user.last_name?.trim()].filter(Boolean).join(' ')
     await joinedRepository.create({
       slotId,
       userId: user.id,
       username: user.username ?? null,
-      name: user.first_name ?? null,
+      name: displayName ?? null,
     })
     await slotsRepository.updateById(slotId, { finalSent: 0 })
     return { success: true, msg: '恭喜！抢到名额了', alert: false }
@@ -137,11 +138,21 @@ async function refreshSlotDisplay(slotId: string): Promise<{ success: boolean; e
   try {
     const slot = await slotsRepository.getById(slotId)
     if (!slot) return { success: false, error: new Error('Slot not found') }
-  
+
+    const currentMessage = slot.message
+
     const joinedCnt = (await joinedRepository.listBySlotId(slotId)).length
     const remaining = slot.limit - joinedCnt
-    const text = `${slot.message}\n已获得名额：${joinedCnt}/${slot.limit}  剩余：${remaining}/${slot.limit}`
-  
+    const lines = slot.message.split('\n');
+    const message = lines.length > 1 && lines[lines.length - 1]
+      ? lines.slice(0, -1).join('\n')
+      : lines.join('\n');
+    const text = `${message}\n已获得名额：${joinedCnt}/${slot.limit}  剩余：${remaining}/${slot.limit}`
+
+    if (currentMessage === text) {
+      return { success: false, error: new Error('Message is the same') }
+    }
+
     const joinKb = Markup.inlineKeyboard([Markup.button.callback('我要抢！', `join_${slotId}`)])
     if (slot.messageType === 'photo' || slot.messageType === 'video') {
       await bot.telegram.editMessageCaption(slot.chatId, slot.messageId, undefined, text, {
@@ -152,6 +163,7 @@ async function refreshSlotDisplay(slotId: string): Promise<{ success: boolean; e
         reply_markup: joinKb.reply_markup,
       })
     }
+    await slotsRepository.updateById(slotId, { message: text })
     return { success: true }
   } catch(e: unknown) {
     logger.error(e)
@@ -178,6 +190,7 @@ bot.on('callback_query', async (ctx: Context) => {
       const joinedFinal = await joinedRepository.listBySlotId(slotId)
       if (slotFinal && !slotFinal.finalSent && joinedFinal.length === slotFinal.limit) {
         const list = joinedFinal
+          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
           .map((u, i) => {
             const namePart = u.name ? `${u.name} ` : ''
             const mention = u.username ? `@${u.username}` : `tg://user?id=${u.userId}`
