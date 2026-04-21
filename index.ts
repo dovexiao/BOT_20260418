@@ -10,6 +10,8 @@ import { randomUUID } from 'node:crypto'
 import slotsRepository from './src/db/repositories/slots.js'
 import chatsRepository from './src/db/repositories/chats.js'
 import joinedRepository from './src/db/repositories/joined.js'
+import allowedRepository from './src/db/repositories/allowed.js'
+import allowed from './src/db/repositories/allowed.js'
 
 const token = process.env.BOT_TOKEN
 if (!token) {
@@ -20,93 +22,75 @@ if (!token) {
 const bot = new Telegraf(token)
 const botUtil = new TgBotUtil(bot)
 
-bot.start(async (ctx) => {
-  if (!ctx.chat) return
-  if (ctx.chat.type === 'private') return
-  const chat = await chatsRepository.getByChatId(ctx.chat.id)
-  if (chat) return
-  await chatsRepository.create({
-    chatId: ctx.chat.id,
-    chatName: ctx.chat.title,
-  })
-  void ctx.reply('欢迎使用抢名额Bot')
-})
-
 type TelegramErr = { response?: { error_code?: number, [key: string]: any; } }
 
 function isTelegramErr(e: unknown): e is TelegramErr {
   return typeof e === 'object' && e !== null && 'response' in e
 }
 
-const handleCreate = async (ctx: Context) => {
-  if (!ctx.message) return
-  if (!ctx.from) return
+const handleStart = async (ctx: Context) => {
   if (!ctx.chat) return
 
-  const rawText = ('caption' in ctx.message ? ctx.message.caption : undefined) || ('text' in ctx.message ? ctx.message.text : '') || ''
-  const trimmed = rawText.trim()
-  if (!trimmed.startsWith('/create ')) return
-
-  const parts = trimmed.split(' ')
-  const [, countStr, ...msgArr] = parts
-
-  if (!countStr) return
-
-  const count = parseInt(countStr, 10)
-  const slotBody = msgArr.join(' ')
-
-  // const result = await botUtil.isAdmin(ctx)
-  // if (!result.success) {
-  //   return ctx.reply(`@${ctx.from.username ?? ctx.from.first_name} ` + '只有群管理员才能使用此指令')
-  // }
-
-  const chat = await chatsRepository.getFirst()
-  if (!chat) {
-    logger.error('chat not found')
-    await botUtil.safeAnswerCb(ctx, '该bot暂未加入任何群聊', true)
-    return
-  }
+  // const { success: isGroup } = await botUtil.isGroup(ctx)
+  // if (!isGroup) return
+  if (ctx.chat.type !== 'group' && ctx.chat.type !== 'supergroup') return
 
   try {
-    const slotId = randomUUID()
+    const chats = await chatsRepository.list()
+    if (chats && chats.length > 0) return
+    
+    await chatsRepository.create({
+      chatId: ctx.chat.id,
+      chatName: ctx.chat.title,
+    })
+    void ctx.reply('欢迎使用抢名额Bot')
+  } catch (e: unknown) {
+    logger.error(e)
+    await botUtil.safeAnswerCb(ctx, '启动失败', true)
+  }
+}
 
-    const keyboard = Markup.inlineKeyboard([Markup.button.callback('我要抢！', `join_${slotId}`)])
+const handleCreate = async (ctx: Context) => {
+  try {
+    if (!ctx.message) return
+    if (!ctx.from) return
+    if (!ctx.chat) return
+
+    const { success: isGroup } = await botUtil.isGroup(ctx)
+    if (isGroup) return
+
+    const messageText: string = (('caption' in ctx.message ? ctx.message.caption : 'text' in ctx.message ? ctx.message.text : undefined) ?? '').trim()
+    if (!messageText.startsWith('/create ')) return
+    const [, countStr, ...msgArr] = messageText.split(' ')
+
+    if (!countStr) return
+
+    const count = parseInt(countStr, 10)
+    const slotBody = msgArr.join(' ')
 
     const messageType: 'text' | 'photo' | 'video' = 'photo' in ctx.message && ctx.message.photo ? 'photo' : 'video' in ctx.message && ctx.message.video ? 'video' : 'text'
+    
     const mediaId: string | undefined = 
       'photo' in ctx.message && ctx.message.photo ? ctx.message.photo[ctx.message.photo.length - 1]!.file_id : 
         'video' in ctx.message && ctx.message.video ? ctx.message.video.file_id : 
           undefined
 
-    const { success, data } = await botUtil.safeSendChat(chat.chatId, `${slotBody}\n剩余名额：${count}`, messageType, mediaId, keyboard)
-    if (!success || !data) {
-      await botUtil.safeAnswerCb(ctx, '创建活动失败', true)
-      return
-    }
+    const chat = await chatsRepository.getFirst()
+    if (!chat) return
 
-    const slot = {
-      id: slotId,
-      chatId: chat.chatId,
-      message: slotBody,
-      limit: count,
-      messageId: data.message_id,
-      messageType: messageType,
-    }
-    // logger.info('slot', slot)
-    await slotsRepository.create(slot)
+    const result = await botUtil.getOwnerUserId(chat.chatId)
+    const { success: isOwner, data: ownerId } = result
+    if (!isOwner || !ownerId) return
 
-    // await ctx.deleteMessage(ctx.message.message_id)
+    const confirmMessage = `@${ctx.from.username ?? ctx.from.first_name + ctx.from.last_name} 想发起了一个活动：${slotBody}，名额数目为 ${count}，请确认是否允许。`
+    const keyboard = Markup.inlineKeyboard([Markup.button.callback('确认', `confirm_create#${ctx.from.id}#${messageType}#${mediaId}#${count}#${slotBody}`), Markup.button.callback('拒绝', `reject_create#${ctx.from.id}`)])
 
-    void refreshSlotDisplay(slotId)
+    void botUtil.safeSendPrivate(ownerId, confirmMessage, messageType, mediaId, keyboard)
   } catch (e: unknown) {
     logger.error(e)
     await botUtil.safeAnswerCb(ctx, '创建活动失败', true)
   }
 }
-
-bot.command('create', handleCreate)
-bot.on(messageFilter('photo'), handleCreate)
-bot.on(messageFilter('video'), handleCreate)
 
 async function handleJoin(slotId: string, user?: Context['from']) {
   if (!user) return { success: false, msg: '无法识别用户', alert: true, error: new Error('User not found') }
@@ -171,9 +155,62 @@ async function refreshSlotDisplay(slotId: string): Promise<{ success: boolean; e
   }
 }
 
+async function handleAllowSlot(ctx: Context) {
+  if (!ctx.message) return
+  if (!ctx.from) return
+  if (!ctx.chat) return
+
+  try {
+    const { success: isGroup } = await botUtil.isGroup(ctx)
+    if (isGroup) return
+
+    const chat = await chatsRepository.getFirst()
+    if (!chat) return
+
+    const { success: isAdmin } = await botUtil.isAdminInGroup(ctx, chat.chatId)
+    if (!isAdmin) return
+
+    const username = 'text' in ctx.message ? ctx.message.text.split(' ')[1] : undefined
+    if (!username) {
+      await ctx.reply('请输入要允许的用户名')
+      return
+    }
+
+    const existed = await allowedRepository.getByUsername(username)
+    if (existed && existed.isDeleted === 0) {
+      await ctx.reply(`@${username} 已在白名单中`)
+      return
+    }
+
+    if (existed) {
+      await allowedRepository.updateById(existed.id, {
+        isDeleted: 0,
+        revokedAt: null,
+      })
+    } else {
+      await allowedRepository.create({ username })
+    }
+
+    await ctx.reply(`已创建允许 @${username} 发起活动`)
+  } catch (e: unknown) {
+    logger.error(e)
+    await botUtil.safeAnswerCb(ctx, '创建允许失败', true)
+  }
+}
+
+bot.start(handleStart)
+
+bot.command('create', handleCreate)
+bot.on(messageFilter('photo'), handleCreate)
+bot.on(messageFilter('video'), handleCreate)
+
+// 授予发起活动权限
+bot.command('allow_slot', handleAllowSlot)
+
 bot.on('callback_query', async (ctx: Context) => {
   const cq = ctx.callbackQuery
   const data = cq && 'data' in cq && cq.data ? cq.data : undefined
+  
   if (typeof data === 'string' && data.startsWith('join_')) {
     const slotId = data.split('_')[1]!
     if (!ctx.from) {
@@ -201,6 +238,48 @@ bot.on('callback_query', async (ctx: Context) => {
         await slotsRepository.updateById(slotId, { finalSent: 1 })
       }
     }
+  } else if (typeof data === 'string' && data.startsWith('confirm_create#')) {
+    const chat = await chatsRepository.getFirst()
+    if (!chat) {
+      logger.error('chat not found')
+      await botUtil.safeAnswerCb(ctx, '该bot暂未加入任何群聊', false)
+      return
+    }
+    const slotId = randomUUID()
+
+    const keyboard = Markup.inlineKeyboard([Markup.button.callback('我要抢！', `join_${slotId}`)])
+
+    const [, userId, messageType, mediaId, countStr, slotBody] = data.split('#')
+    const count = parseInt(countStr, 10)
+
+    const { success, data: message } = await botUtil.safeSendChat(chat.chatId, `${slotBody}\n剩余名额：${count}`, messageType as 'text' | 'photo' | 'video', mediaId, keyboard)
+    if (!success || !message) {
+      await botUtil.safeAnswerCb(ctx, '创建活动失败', true)
+      await botUtil.safeSendPrivate(Number(userId), '活动创建失败', 'text')
+      return
+    }
+
+    const slot = {
+      id: slotId,
+      chatId: chat.chatId,
+      message: slotBody,
+      limit: count,
+      messageId: message.message_id,
+      messageType: messageType,
+    }
+    
+    await slotsRepository.create(slot)
+
+    // await ctx.deleteMessage(ctx.message.message_id)
+
+    void refreshSlotDisplay(slotId)
+
+    await botUtil.safeAnswerCb(ctx, '活动创建成功', false)
+    await botUtil.safeSendPrivate(Number(userId), '活动创建成功', 'text')
+  } else if (typeof data === 'string' && data.startsWith('reject_create#')) {
+    const [, userId] = data.split('#')
+    await botUtil.safeAnswerCb(ctx, '该活动创建已被取消', false)
+    await botUtil.safeSendPrivate(Number(userId), '该活动创建未通过群主审核', 'text')
   }
 })
 

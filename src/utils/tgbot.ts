@@ -10,14 +10,35 @@ class TgBotUtil {
    * 尝试向用户私聊发送消息。
    */
   async safeSendPrivate(
-    ctx: Context,
     userId: number,
     text: string,
+    type: 'text' | 'photo' | 'video',
+    mediaId?: string,
     extra?: Types.ExtraReplyMessage
-  ): Promise<{ success: boolean; data?: Message.TextMessage; error?: unknown }> {
+  ): Promise<{
+    success: boolean
+    data?: Message.TextMessage | Message.PhotoMessage | Message.VideoMessage
+    error?: unknown
+  }> {
     try {
-      const result = await ctx.telegram.sendMessage(userId, text, extra)
-      return { success: true, data: result }
+      let sent: Message.TextMessage | Message.PhotoMessage | Message.VideoMessage | undefined
+      if (type === 'text') {
+        sent = await this.bot.telegram.sendMessage(userId, text, extra)
+        return { success: true, data: sent }
+      } else if (type === 'photo' && mediaId) {
+        sent = await this.bot.telegram.sendPhoto(userId, mediaId, {
+          caption: text,
+          reply_markup: extra?.reply_markup,
+        })
+        return { success: true, data: sent }
+      } else if (type === 'video' && mediaId) {
+        sent = await this.bot.telegram.sendVideo(userId, mediaId, {
+          caption: text,
+          reply_markup: extra?.reply_markup,
+        })
+        return { success: true, data: sent }
+      }
+      return { success: false, error: new Error('Invalid message type') }
     } catch (e: unknown) {
       logger.error(e)
       return { success: false, error: e }
@@ -87,7 +108,7 @@ class TgBotUtil {
   }
 
   /**
-   * 判断当前用户是否为群管理员或创建者。
+   * 判断群聊会话中当前用户是否为群管理员或创建者。
    */
   async isAdmin(ctx: Context): Promise<{ success: boolean; data?: boolean; error?: unknown }> {
     try {
@@ -97,6 +118,52 @@ class TgBotUtil {
 
       const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id)
       return { success: true, data: member.status === 'administrator' || member.status === 'creator' }
+    } catch (e: unknown) {
+      logger.error(e)
+      return { success: false, error: e }
+    }
+  }
+
+  /** 
+   * 判断当前用户是否为指定群的管理员或创建者
+   */
+  async isAdminInGroup(ctx: Context, chatId: number): Promise<{ success: boolean; data?: boolean; error?: unknown }> {
+    try {
+      if (!ctx.chat) return { success: false, error: new Error('Chat not found') }
+      if (!ctx.from) return { success: false, error: new Error('User not found') }
+
+      const member = await ctx.telegram.getChatMember(chatId, ctx.from.id)
+      return { success: true, data: member.status === 'administrator' || member.status === 'creator' }
+    } catch (e: unknown) {
+      logger.error(e)
+      return { success: false, error: e }
+    }
+  }
+
+  /** 
+   * 查询指定群的群主用户id（在该群，拥有权限）
+  */
+  async getOwnerUserId(chatId: number): Promise<{ success: boolean; data?: number; error?: unknown }> {
+    try {
+      const admins = await this.bot.telegram.getChatAdministrators(chatId)
+      const owner = admins.find((m) => m.status === 'creator')?.user
+      if (!owner || !('id' in owner) || !owner.id) return { success: false, error: new Error('Owner not found') }
+      return { success: true, data: owner.id }
+    } catch (e: unknown) {
+      logger.error(e)
+      return { success: false, error: e }
+    }
+  }
+
+  /** 
+   * 判断当前会话是否是群聊
+   */
+  async isGroup(ctx: Context): Promise<{ success: boolean; error?: unknown }> {
+    try {
+      if (!ctx.chat) return { success: false, error: new Error('Chat not found') }
+      if (ctx.chat.type !== 'group' && ctx.chat.type !== 'supergroup') return { success: false, error: new Error('Chat is not a group') }
+      if (!ctx.from) return { success: false, error: new Error('User not found') }
+      return { success: true }
     } catch (e: unknown) {
       logger.error(e)
       return { success: false, error: e }

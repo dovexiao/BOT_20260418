@@ -50,3 +50,13 @@ model Joined {
   @@id([slotId, userId])
   @@map("joined")
 }
+
+model Allowed {
+  id        Int     @id @default(autoincrement())
+  username  String
+  createdAt String  @default(dbgenerated("(datetime('now'))")) @map("createdAt")
+  revokedAt String? @map("revokedAt")
+  isDeleted Int     @default(0) @map("isDeleted")
+
+  @@map("allowed")
+}

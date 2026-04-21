@@ -72,3 +72,25 @@ export interface UpdateJoined {
   createdAt?: string
   revokedAt?: string | null
 }
+
+export interface AllowedRow {
+  id: number
+  username: string
+  createdAt: string
+  revokedAt: string | null
+  isDeleted: number
+}
+
+export interface CreateAllowed {
+  username: string
+  createdAt?: string
+  revokedAt?: string | null
+  isDeleted?: number
+}
+
+export interface UpdateAllowed {
+  username?: string
+  createdAt?: string
+  revokedAt?: string | null
+  isDeleted?: number
+}
