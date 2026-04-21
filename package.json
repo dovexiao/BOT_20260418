@@ -4,17 +4,21 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "migrate": "npm run build && node dist/db/migrate.js",
-    "start": "npm run build && node dist/db/migrate.js && node dist/index.js",
-    "dev": "tsx db/migrate.ts && tsx index.ts"
+    "build": "prisma generate && tsc",
+    "migrate": "prisma migrate deploy",
+    "start": "npm run build && prisma migrate deploy && node dist/index.js",
+    "dev": "prisma migrate deploy && tsx index.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@prisma/adapter-better-sqlite3": "7.7.0",
+    "@prisma/client": "7.7.0",
     "better-sqlite3": "^9.6.0",
     "dotenv": "^16.0.0",
+    "express": "^4.19.2",
+    "prisma": "^7.7.0",
     "telegraf": "^4.12.2",
-    "telegraf-media-group": "^1.2.1",
-    "express": "^4.19.2"
+    "telegraf-media-group": "^1.2.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

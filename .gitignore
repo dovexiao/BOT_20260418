@@ -1,6 +1,7 @@
 node_modules/
 .env
 dist/
+src/generated/
 *.log
 .DS_Store
 .idea/

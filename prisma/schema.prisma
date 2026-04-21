@@ -1,0 +1,52 @@
+// https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Blacklist {
+  username        String  @id
+  created_at      String  @default(dbgenerated("(datetime('now'))")) @map("created_at")
+  revoked_at      String? @map("revoked_at")
+  feedback_result String? @map("feedback_result")
+
+  @@map("blacklist")
+}
+
+model Slot {
+  id               String @id
+  chatId           Int    @map("chatId")
+  message          String
+  participantLimit Int    @map("limit")
+  messageId        Int    @map("messageId")
+  messageType      String @map("messageType")
+  finalSent        Int    @default(0) @map("finalSent")
+
+  @@map("slots")
+}
+
+model Chat {
+  chatId    Int     @id @map("chatId")
+  chatName  String  @map("chatName")
+  createdAt String  @default(dbgenerated("(datetime('now'))")) @map("createdAt")
+  leftAt    String? @map("leftAt")
+
+  @@map("chats")
+}
+
+model Joined {
+  slotId    String
+  userId    Int
+  username  String?
+  name      String?
+  createdAt String  @default(dbgenerated("(datetime('now'))")) @map("createdAt")
+  revokedAt String? @map("revokedAt")
+
+  @@id([slotId, userId])
+  @@map("joined")
+}
